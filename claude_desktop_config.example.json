@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "qsys-designer": {
+      "command": "node",
+      "args": ["/CHANGE/THIS/PATH/qsys-claude-mcp/mcp-server/index.js"],
+      "env": {
+        "QSYS_HOST": "127.0.0.1",
+        "QSYS_PORT": "8765"
+      }
+    }
+  }
+}

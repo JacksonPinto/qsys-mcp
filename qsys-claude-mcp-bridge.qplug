@@ -1,0 +1,564 @@
+-- ==============================================================================
+-- Q-SYS Plugin: Claude MCP Bridge Server
+-- Version: 1.0.0
+-- Description: Exposes a TCP/JSON-RPC server inside Q-SYS Designer so that
+--              the Claude Desktop MCP bridge can read and control the design.
+-- Protocol: newline-delimited JSON-RPC 2.0 over TCP
+-- ==============================================================================
+
+PluginInfo = {
+  Name         = "Claude~MCP Bridge",           -- tilde separates category from name
+  Version      = "1.0.0",
+  Id           = "com.qsys.claude-mcp-bridge",
+  Description  = "Bidirectional MCP bridge between Q-SYS Designer and Claude Desktop AI",
+  ShowDebug    = true,
+  Author       = "Q-SYS Claude Integration",
+  Contact      = ""
+}
+
+-- ==============================================================================
+-- DESIGN-TIME: Properties
+-- ==============================================================================
+function GetProperties()
+  return {
+    {
+      Name    = "TCP Port",
+      Type    = "integer",
+      Value   = 8765,
+      Min     = 1024,
+      Max     = 65535
+    },
+    {
+      Name    = "Max Clients",
+      Type    = "integer",
+      Value   = 4,
+      Min     = 1,
+      Max     = 16
+    },
+    {
+      Name    = "Heartbeat Interval (sec)",
+      Type    = "integer",
+      Value   = 30,
+      Min     = 5,
+      Max     = 300
+    },
+    {
+      Name    = "Allow Control Writes",
+      Type    = "boolean",
+      Value   = true
+    }
+  }
+end
+
+-- ==============================================================================
+-- DESIGN-TIME: Controls
+-- ==============================================================================
+function GetControls(props)
+  return {
+    -- Status indicators
+    { Name = "Status",           ControlType = "Indicator", IndicatorType = "Status", UserPin = true,  PinStyle = "Output"     },
+    { Name = "StatusText",       ControlType = "Indicator", IndicatorType = "Text",   UserPin = true,  PinStyle = "Output"     },
+    { Name = "ConnectedClients", ControlType = "Indicator", IndicatorType = "Text",   UserPin = true,  PinStyle = "Output"     },
+    { Name = "BytesReceived",    ControlType = "Indicator", IndicatorType = "Text",   UserPin = false                         },
+    { Name = "CommandCount",     ControlType = "Indicator", IndicatorType = "Text",   UserPin = false                         },
+    -- Controls
+    { Name = "Restart",          ControlType = "Button",    ButtonType    = "Trigger",UserPin = true,  PinStyle = "Input"      },
+    { Name = "ClearLog",         ControlType = "Button",    ButtonType    = "Trigger",UserPin = false                         },
+    -- Log
+    { Name = "EventLog",         ControlType = "Indicator", IndicatorType = "Text",   UserPin = false                         }
+  }
+end
+
+-- ==============================================================================
+-- DESIGN-TIME: Pages
+-- ==============================================================================
+function GetPages(props)
+  return {
+    { name = "Server" },
+    { name = "About"  }
+  }
+end
+
+-- ==============================================================================
+-- DESIGN-TIME: Pins (external I/O)
+-- ==============================================================================
+function GetPins(props)
+  return {}
+end
+
+-- ==============================================================================
+-- DESIGN-TIME: Control Layout
+-- ==============================================================================
+function GetControlLayout(props)
+  local layout   = {}
+  local graphics = {}
+  local W, H     = 440, 280
+
+  -- ── Background ──────────────────────────────────────────────────────────────
+  table.insert(graphics, {
+    Type        = "GroupBox",
+    Text        = "Claude MCP Bridge Server  v1.0.0",
+    Fill        = { R = 15,  G = 18,  B = 30  },
+    StrokeColor = { R = 80,  G = 130, B = 255 },
+    StrokeWidth = 2,
+    CornerRadius= 6,
+    Position    = { 0, 0 },
+    Size        = { W, H },
+    FontSize    = 11,
+    Color       = { R = 180, G = 200, B = 255 }
+  })
+
+  -- ── Status row ──────────────────────────────────────────────────────────────
+  layout["Status"] = {
+    PrettyName = "Server Status",
+    Style      = "StatusLight",
+    Position   = { 12, 32 },
+    Size       = { 20, 20 }
+  }
+  layout["StatusText"] = {
+    PrettyName = "Status Text",
+    Style      = "Text",
+    Position   = { 36, 32 },
+    Size       = { W - 50, 20 },
+    HTextAlign = "Left",
+    Color      = { R = 220, G = 225, B = 255 }
+  }
+
+  -- ── Client count ────────────────────────────────────────────────────────────
+  table.insert(graphics, {
+    Type     = "Label",
+    Text     = "Connected Clients:",
+    Position = { 12, 60 },
+    Size     = { 140, 18 },
+    Color    = { R = 140, G = 160, B = 220 },
+    FontSize = 10
+  })
+  layout["ConnectedClients"] = {
+    PrettyName = "Connected Clients",
+    Style      = "Text",
+    Position   = { 155, 60 },
+    Size       = { 80, 18 },
+    HTextAlign = "Left",
+    Color      = { R = 100, G = 210, B = 130 }
+  }
+
+  -- ── Stats ────────────────────────────────────────────────────────────────────
+  table.insert(graphics, {
+    Type     = "Label",
+    Text     = "Commands:",
+    Position = { 250, 60 },
+    Size     = { 80, 18 },
+    Color    = { R = 140, G = 160, B = 220 },
+    FontSize = 10
+  })
+  layout["CommandCount"] = {
+    PrettyName = "Command Count",
+    Style      = "Text",
+    Position   = { 335, 60 },
+    Size       = { 95, 18 },
+    HTextAlign = "Left",
+    Color      = { R = 255, G = 200, B = 80 }
+  }
+
+  -- ── Buttons ──────────────────────────────────────────────────────────────────
+  layout["Restart"] = {
+    PrettyName = "Restart Server",
+    Style      = "Button",
+    ButtonStyle= "Trigger",
+    Position   = { 12, 88 },
+    Size       = { 120, 28 },
+    Color      = { R = 50,  G = 90,  B = 200 },
+    FontSize   = 11
+  }
+  layout["ClearLog"] = {
+    PrettyName = "Clear Log",
+    Style      = "Button",
+    ButtonStyle= "Trigger",
+    Position   = { 142, 88 },
+    Size       = { 90, 28 },
+    Color      = { R = 60,  G = 60,  B = 80  },
+    FontSize   = 11
+  }
+
+  -- ── Bytes received ───────────────────────────────────────────────────────────
+  table.insert(graphics, {
+    Type     = "Label",
+    Text     = "Bytes Rx:",
+    Position = { 250, 94 },
+    Size     = { 70, 18 },
+    Color    = { R = 140, G = 160, B = 220 },
+    FontSize = 10
+  })
+  layout["BytesReceived"] = {
+    PrettyName = "Bytes Received",
+    Style      = "Text",
+    Position   = { 325, 94 },
+    Size       = { 105, 18 },
+    HTextAlign = "Left",
+    Color      = { R = 180, G = 180, B = 180 }
+  }
+
+  -- ── Event log ────────────────────────────────────────────────────────────────
+  table.insert(graphics, {
+    Type        = "GroupBox",
+    Text        = "Event Log",
+    Fill        = { R = 8,   G = 10,  B = 20  },
+    StrokeColor = { R = 60,  G = 80,  B = 140 },
+    StrokeWidth = 1,
+    Position    = { 10, 126 },
+    Size        = { W - 20, H - 136 },
+    FontSize    = 9,
+    Color       = { R = 100, G = 120, B = 180 }
+  })
+  layout["EventLog"] = {
+    PrettyName  = "Event Log",
+    Style       = "Text",
+    Position    = { 14, 140 },
+    Size        = { W - 28, H - 150 },
+    HTextAlign  = "Left",
+    WordWrap    = true,
+    Color       = { R = 130, G = 220, B = 150 }
+  }
+
+  return layout, graphics
+end
+
+-- ==============================================================================
+-- RUNTIME CODE  (only executed when the plugin is live in Q-SYS Core/Emulator)
+-- ==============================================================================
+if Controls then
+
+  -- ── Dependencies ─────────────────────────────────────────────────────────────
+  local json = require("json")
+
+  -- ── State ────────────────────────────────────────────────────────────────────
+  local server        = nil
+  local clients       = {}        -- sock → true
+  local clientBuffers = {}        -- sock → string (incomplete line buffer)
+  local clientCount   = 0
+  local commandCount  = 0
+  local bytesReceived = 0
+  local logLines      = {}
+  local MAX_LOG       = 24
+  local allowWrites   = true
+
+  -- ── Helpers ──────────────────────────────────────────────────────────────────
+  local function log(msg)
+    local ts = os.date("%H:%M:%S")
+    table.insert(logLines, string.format("[%s] %s", ts, msg))
+    if #logLines > MAX_LOG then table.remove(logLines, 1) end
+    Controls.EventLog.String = table.concat(logLines, "\n")
+  end
+
+  local function setStatus(code, text)
+    -- code: 0 = OK (green), 1 = Compromised (yellow), 2 = Fault (red)
+    Controls.Status.Value    = code
+    Controls.StatusText.String = text
+  end
+
+  local function refreshStats()
+    Controls.ConnectedClients.String = tostring(clientCount)
+    Controls.CommandCount.String     = tostring(commandCount)
+    Controls.BytesReceived.String    = string.format("%d B", bytesReceived)
+  end
+
+  local function encode(tbl)
+    return json.encode(tbl) .. "\n"
+  end
+
+  -- ── Q-SYS Design Introspection ───────────────────────────────────────────────
+
+  local function getDesignInfo()
+    return {
+      name        = Design.Name       or "Unknown",
+      isEmulating = Design.IsEmulating or false,
+      platform    = Design.Platform   or "Unknown"
+    }
+  end
+
+  local function listComponents()
+    local result = {}
+    local ok, comps = pcall(Component.GetComponents)
+    if ok and comps then
+      for _, c in ipairs(comps) do
+        table.insert(result, {
+          name       = c.Name,
+          type       = c.Type,
+          properties = c.Properties or {}
+        })
+      end
+    end
+    return result
+  end
+
+  local function getComponentDetails(name)
+    local ok, comp = pcall(Component.New, name)
+    if not ok or not comp then
+      return nil, "Component not found: " .. tostring(name)
+    end
+    local controls = {}
+    local cok, ctrls = pcall(function() return comp:GetControls() end)
+    if cok and ctrls then
+      for cname, ctrl in pairs(ctrls) do
+        table.insert(controls, {
+          name            = cname,
+          value           = ctrl.Value,
+          string          = ctrl.String,
+          min             = ctrl.Min,
+          max             = ctrl.Max,
+          isDisabled      = ctrl.IsDisabled,
+          isIndeterminate = ctrl.IsIndeterminate
+        })
+      end
+    end
+    return { name = name, type = comp.Type or "Unknown", controls = controls }, nil
+  end
+
+  local function getControlValue(compName, ctrlName)
+    local ok, comp = pcall(Component.New, compName)
+    if not ok or not comp then return nil, "Component not found: " .. compName end
+    local ok2, ctrl = pcall(function() return comp[ctrlName] end)
+    if not ok2 or not ctrl then return nil, "Control not found: " .. ctrlName end
+    return {
+      value           = ctrl.Value,
+      string          = ctrl.String,
+      min             = ctrl.Min,
+      max             = ctrl.Max,
+      isDisabled      = ctrl.IsDisabled,
+      isIndeterminate = ctrl.IsIndeterminate
+    }, nil
+  end
+
+  local function setControlValue(compName, ctrlName, value, valueType)
+    if not allowWrites then
+      return false, "Control writes are disabled in plugin properties"
+    end
+    local ok, comp = pcall(Component.New, compName)
+    if not ok or not comp then return false, "Component not found: " .. compName end
+    local ok2, ctrl = pcall(function() return comp[ctrlName] end)
+    if not ok2 or not ctrl then return false, "Control not found: " .. ctrlName end
+    local vt = valueType or "number"
+    if vt == "string"  then ctrl.String  = tostring(value)
+    elseif vt == "boolean" then ctrl.Boolean = value
+    else ctrl.Value = tonumber(value) or 0
+    end
+    return true, nil
+  end
+
+  local function findComponents(query, typeFilter)
+    local q  = (query      or ""):lower()
+    local tf = (typeFilter or ""):lower()
+    local all = listComponents()
+    local out = {}
+    for _, c in ipairs(all) do
+      local nm  = (c.name or ""):lower()
+      local tp  = (c.type or ""):lower()
+      local nmOk = q  == "" or nm:find(q,  1, true) ~= nil
+      local tpOk = tf == "" or tp:find(tf, 1, true) ~= nil
+      if nmOk and tpOk then table.insert(out, c) end
+    end
+    return out
+  end
+
+  -- ── Command dispatcher ───────────────────────────────────────────────────────
+
+  local function sendTo(sock, tbl)
+    pcall(function() sock:Write(encode(tbl)) end)
+  end
+
+  local function processCommand(sock, line)
+    commandCount = commandCount + 1
+    refreshStats()
+
+    local ok, cmd = pcall(json.decode, line)
+    if not ok or type(cmd) ~= "table" then
+      sendTo(sock, { id = nil, error = { code = -32700, message = "Parse error" } })
+      return
+    end
+
+    local id     = cmd.id
+    local method = cmd.method or ""
+    local params = cmd.params or {}
+
+    local function result(r)   sendTo(sock, { id = id, result = r }) end
+    local function fault(c, m) sendTo(sock, { id = id, error = { code = c, message = m } }) end
+
+    -- ── Route ────────────────────────────────────────────────────────────────
+    if method == "ping" then
+      result({ pong = true, timestamp = os.time(), designName = Design.Name or "Unknown" })
+
+    elseif method == "design.getInfo" then
+      result(getDesignInfo())
+
+    elseif method == "design.listComponents" then
+      result({ components = listComponents() })
+
+    elseif method == "design.findComponents" then
+      result({ components = findComponents(params.query, params.type) })
+
+    elseif method == "component.getDetails" then
+      if not params.name then fault(-32602, "Missing: name") return end
+      local det, err = getComponentDetails(params.name)
+      if err then fault(-32001, err) else result(det) end
+
+    elseif method == "control.getValue" then
+      if not params.component or not params.control then
+        fault(-32602, "Missing: component, control") return
+      end
+      local val, err = getControlValue(params.component, params.control)
+      if err then fault(-32001, err) else result(val) end
+
+    elseif method == "control.setValue" then
+      if not params.component or not params.control or params.value == nil then
+        fault(-32602, "Missing: component, control, value") return
+      end
+      local ok2, err = setControlValue(
+        params.component, params.control, params.value, params.valueType)
+      if not ok2 then
+        fault(-32001, err)
+      else
+        result({ success = true })
+        log(string.format("SET  %s.%s = %s", params.component, params.control, tostring(params.value)))
+      end
+
+    elseif method == "control.setMultiple" then
+      -- Bulk-set: params.controls = [ {component, control, value, valueType}, ... ]
+      local results = {}
+      for _, item in ipairs(params.controls or {}) do
+        local ok2, err = setControlValue(item.component, item.control, item.value, item.valueType)
+        table.insert(results, { component = item.component, control = item.control, success = ok2, error = err })
+      end
+      result({ results = results })
+      log(string.format("SET_MULTI  %d controls", #results))
+
+    else
+      fault(-32601, "Method not found: " .. method)
+    end
+  end
+
+  -- ── TCP Server ───────────────────────────────────────────────────────────────
+
+  local function broadcast(tbl)
+    local msg = encode(tbl)
+    for sock in pairs(clients) do
+      pcall(function() sock:Write(msg) end)
+    end
+  end
+
+  local function startServer()
+    -- Teardown existing server
+    if server then
+      pcall(function() server:Close() end)
+      server = nil
+    end
+    clients       = {}
+    clientBuffers = {}
+    clientCount   = 0
+    commandCount  = 0
+    bytesReceived = 0
+    refreshStats()
+
+    allowWrites = Properties["Allow Control Writes"].Value
+
+    server = TcpSocket.New()
+
+    server.EventHandler = function(sock, event, err)
+      -- ── New connection ────────────────────────────────────────────────────
+      if event == TcpSocket.Events.Connected then
+        clients[sock]       = true
+        clientBuffers[sock] = ""
+        clientCount         = clientCount + 1
+        refreshStats()
+        log("Client connected  [total=" .. clientCount .. "]")
+        sendTo(sock, {
+          event      = "connected",
+          server     = "Q-SYS Claude MCP Bridge",
+          version    = "1.0.0",
+          designName = Design.Name or "Unknown",
+          writesAllowed = allowWrites
+        })
+
+      -- ── Incoming data ─────────────────────────────────────────────────────
+      elseif event == TcpSocket.Events.Data then
+        local data = sock:Read(sock.BufferLength)
+        bytesReceived       = bytesReceived + #data
+        clientBuffers[sock] = (clientBuffers[sock] or "") .. data
+        -- Process newline-delimited JSON
+        while true do
+          local line, rest = clientBuffers[sock]:match("^([^\n]*)\n(.*)")
+          if not line then break end
+          clientBuffers[sock] = rest or ""
+          if line:match("%S") then   -- skip blank lines
+            local pok, perr = pcall(processCommand, sock, line)
+            if not pok then
+              log("CMD error: " .. tostring(perr))
+              sendTo(sock, { error = { code = -32603, message = "Internal error" } })
+            end
+          end
+        end
+        refreshStats()
+
+      -- ── Disconnected ──────────────────────────────────────────────────────
+      elseif event == TcpSocket.Events.Disconnected then
+        clients[sock]       = nil
+        clientBuffers[sock] = nil
+        clientCount         = math.max(0, clientCount - 1)
+        refreshStats()
+        log("Client disconnected  [total=" .. clientCount .. "]")
+
+      -- ── Error ─────────────────────────────────────────────────────────────
+      elseif event == TcpSocket.Events.Error then
+        log("Socket error: " .. tostring(err))
+        if clients[sock] then
+          clients[sock]       = nil
+          clientBuffers[sock] = nil
+          clientCount         = math.max(0, clientCount - 1)
+          refreshStats()
+        end
+      end
+    end
+
+    local port     = Properties["TCP Port"].Value
+    local lok, ler = pcall(function() server:Listen(port) end)
+    if lok then
+      setStatus(0, string.format("Listening on 0.0.0.0:%d", port))
+      log(string.format("Server started on port %d  (writes=%s)", port, tostring(allowWrites)))
+    else
+      setStatus(2, "Failed to listen: " .. tostring(ler))
+      log("FAILED: " .. tostring(ler))
+    end
+  end
+
+  -- ── Event handlers ───────────────────────────────────────────────────────────
+
+  Controls.Restart.EventHandler = function()
+    log("Manual restart requested")
+    startServer()
+  end
+
+  Controls.ClearLog.EventHandler = function()
+    logLines = {}
+    Controls.EventLog.String = ""
+  end
+
+  -- ── Heartbeat timer ──────────────────────────────────────────────────────────
+
+  local hbTimer = Timer.New()
+  hbTimer.EventHandler = function()
+    if clientCount > 0 then
+      broadcast({
+        event       = "heartbeat",
+        timestamp   = os.time(),
+        designName  = Design.Name      or "Unknown",
+        isEmulating = Design.IsEmulating or false
+      })
+    end
+  end
+  hbTimer:Start(Properties["Heartbeat Interval (sec)"].Value)
+
+  -- ── Boot ─────────────────────────────────────────────────────────────────────
+  setStatus(1, "Starting…")
+  log("Plugin initialised — booting server…")
+  Timer.CallAfter(function() startServer() end, 0.5)
+
+end  -- if Controls

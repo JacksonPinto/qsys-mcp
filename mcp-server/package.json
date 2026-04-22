@@ -1,0 +1,21 @@
+{
+  "name": "qsys-claude-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server that bridges Claude Desktop to a Q-SYS Designer plugin over TCP",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "qsys-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "QSYS_HOST=127.0.0.1 QSYS_PORT=8765 node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
