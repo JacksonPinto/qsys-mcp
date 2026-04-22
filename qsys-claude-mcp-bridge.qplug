@@ -436,7 +436,49 @@ if Controls then
     end
   end
 
-  -- ── TCP Server ───────────────────────────────────────────────────────────────
+  -- ── Per-client socket handler ─────────────────────────────────────────────
+
+  local function attachClientHandlers(sock)
+    sock.EventHandler = function(s, event, err)
+      -- ── Incoming data ───────────────────────────────────────────────────
+      if event == TcpSocket.Events.Data then
+        local data = s:Read(s.BufferLength)
+        bytesReceived       = bytesReceived + #data
+        clientBuffers[s]    = (clientBuffers[s] or "") .. data
+        while true do
+          local line, rest = clientBuffers[s]:match("^([^\n]*)\n(.*)")
+          if not line then break end
+          clientBuffers[s] = rest or ""
+          if line:match("%S") then
+            local pok, perr = pcall(processCommand, s, line)
+            if not pok then
+              log("CMD error: " .. tostring(perr))
+              sendTo(s, { error = { code = -32603, message = "Internal error" } })
+            end
+          end
+        end
+        refreshStats()
+
+      -- ── Disconnected ───────────────────────────────────────────────────
+      elseif event == TcpSocket.Events.Disconnected then
+        clients[s]       = nil
+        clientBuffers[s] = nil
+        clientCount      = math.max(0, clientCount - 1)
+        refreshStats()
+        log("Client disconnected  [total=" .. clientCount .. "]")
+
+      -- ── Error ──────────────────────────────────────────────────────────
+      elseif event == TcpSocket.Events.Error then
+        log("Socket error: " .. tostring(err))
+        clients[s]       = nil
+        clientBuffers[s] = nil
+        clientCount      = math.max(0, clientCount - 1)
+        refreshStats()
+      end
+    end
+  end
+
+  -- ── TCP Server (TcpSocketServer) ─────────────────────────────────────────
 
   local function broadcast(tbl)
     local msg = encode(tbl)
@@ -451,6 +493,10 @@ if Controls then
       pcall(function() server:Close() end)
       server = nil
     end
+    -- Disconnect all existing clients
+    for sock in pairs(clients) do
+      pcall(function() sock:Disconnect() end)
+    end
     clients       = {}
     clientBuffers = {}
     clientCount   = 0
@@ -460,62 +506,35 @@ if Controls then
 
     allowWrites = Properties["Allow Control Writes"].Value
 
-    server = TcpSocket.New()
+    -- TcpSocketServer is the correct Q-SYS API for listening/accepting connections
+    server = TcpSocketServer.New()
 
-    server.EventHandler = function(sock, event, err)
-      -- ── New connection ────────────────────────────────────────────────────
-      if event == TcpSocket.Events.Connected then
-        clients[sock]       = true
-        clientBuffers[sock] = ""
-        clientCount         = clientCount + 1
-        refreshStats()
-        log("Client connected  [total=" .. clientCount .. "]")
-        sendTo(sock, {
-          event      = "connected",
-          server     = "Q-SYS Claude MCP Bridge",
-          version    = "1.0.0",
-          designName = Design.Name or "Unknown",
-          writesAllowed = allowWrites
-        })
-
-      -- ── Incoming data ─────────────────────────────────────────────────────
-      elseif event == TcpSocket.Events.Data then
-        local data = sock:Read(sock.BufferLength)
-        bytesReceived       = bytesReceived + #data
-        clientBuffers[sock] = (clientBuffers[sock] or "") .. data
-        -- Process newline-delimited JSON
-        while true do
-          local line, rest = clientBuffers[sock]:match("^([^\n]*)\n(.*)")
-          if not line then break end
-          clientBuffers[sock] = rest or ""
-          if line:match("%S") then   -- skip blank lines
-            local pok, perr = pcall(processCommand, sock, line)
-            if not pok then
-              log("CMD error: " .. tostring(perr))
-              sendTo(sock, { error = { code = -32603, message = "Internal error" } })
-            end
-          end
-        end
-        refreshStats()
-
-      -- ── Disconnected ──────────────────────────────────────────────────────
-      elseif event == TcpSocket.Events.Disconnected then
-        clients[sock]       = nil
-        clientBuffers[sock] = nil
-        clientCount         = math.max(0, clientCount - 1)
-        refreshStats()
-        log("Client disconnected  [total=" .. clientCount .. "]")
-
-      -- ── Error ─────────────────────────────────────────────────────────────
-      elseif event == TcpSocket.Events.Error then
-        log("Socket error: " .. tostring(err))
-        if clients[sock] then
-          clients[sock]       = nil
-          clientBuffers[sock] = nil
-          clientCount         = math.max(0, clientCount - 1)
-          refreshStats()
-        end
+    server.EventHandler = function(srv, newSock)
+      -- newSock is a TcpSocket for the accepted client connection
+      local maxC = Properties["Max Clients"].Value
+      if clientCount >= maxC then
+        log("Max clients reached — rejecting connection")
+        pcall(function() newSock:Disconnect() end)
+        return
       end
+
+      clients[newSock]       = true
+      clientBuffers[newSock] = ""
+      clientCount            = clientCount + 1
+      refreshStats()
+      log("Client connected  [total=" .. clientCount .. "]")
+
+      -- Attach per-socket event handler
+      attachClientHandlers(newSock)
+
+      -- Send welcome packet
+      sendTo(newSock, {
+        event         = "connected",
+        server        = "Q-SYS Claude MCP Bridge",
+        version       = "1.0.0",
+        designName    = Design.Name or "Unknown",
+        writesAllowed = allowWrites
+      })
     end
 
     local port     = Properties["TCP Port"].Value
