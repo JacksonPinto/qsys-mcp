@@ -269,10 +269,21 @@ if Controls then
   -- ── Q-SYS Design Introspection ───────────────────────────────────────────────
 
   local function getDesignInfo()
+    local function readDesignField(field, fallback)
+      local ok, value = pcall(function()
+        if type(Design) == "table" then
+          return Design[field]
+        end
+        return nil
+      end)
+      if ok and value ~= nil then return value end
+      return fallback
+    end
+
     return {
-      name        = Design.Name       or "Unknown",
-      isEmulating = Design.IsEmulating or false,
-      platform    = Design.Platform   or "Unknown"
+      name        = tostring(readDesignField("Name", "Unknown")),
+      isEmulating = readDesignField("IsEmulating", false) == true,
+      platform    = tostring(readDesignField("Platform", "Unknown"))
     }
   end
 
@@ -383,56 +394,67 @@ if Controls then
     local function result(r)   sendTo(sock, { id = id, result = r }) end
     local function fault(c, m) sendTo(sock, { id = id, error = { code = c, message = m } }) end
 
-    -- ── Route ────────────────────────────────────────────────────────────────
-    if method == "ping" then
-      result({ pong = true, timestamp = os.time(), designName = Design.Name or "Unknown" })
+    local routeOk, routeErr = pcall(function()
+      -- ── Route ────────────────────────────────────────────────────────────────
+      if method == "ping" then
+        result({
+          pong = true,
+          timestamp = os.time(),
+          designName = getDesignInfo().name
+        })
 
-    elseif method == "design.getInfo" then
-      result(getDesignInfo())
+      elseif method == "design.getInfo" then
+        result(getDesignInfo())
 
-    elseif method == "design.listComponents" then
-      result({ components = listComponents() })
+      elseif method == "design.listComponents" then
+        result({ components = listComponents() })
 
-    elseif method == "design.findComponents" then
-      result({ components = findComponents(params.query, params.type) })
+      elseif method == "design.findComponents" then
+        result({ components = findComponents(params.query, params.type) })
 
-    elseif method == "component.getDetails" then
-      if not params.name then fault(-32602, "Missing: name") return end
-      local det, err = getComponentDetails(params.name)
-      if err then fault(-32001, err) else result(det) end
+      elseif method == "component.getDetails" then
+        if not params.name then fault(-32602, "Missing: name") return end
+        local det, err = getComponentDetails(params.name)
+        if err then fault(-32001, err) else result(det) end
 
-    elseif method == "control.getValue" then
-      if not params.component or not params.control then
-        fault(-32602, "Missing: component, control") return
-      end
-      local val, err = getControlValue(params.component, params.control)
-      if err then fault(-32001, err) else result(val) end
+      elseif method == "control.getValue" then
+        if not params.component or not params.control then
+          fault(-32602, "Missing: component, control") return
+        end
+        local val, err = getControlValue(params.component, params.control)
+        if err then fault(-32001, err) else result(val) end
 
-    elseif method == "control.setValue" then
-      if not params.component or not params.control or params.value == nil then
-        fault(-32602, "Missing: component, control, value") return
-      end
-      local ok2, err = setControlValue(
-        params.component, params.control, params.value, params.valueType)
-      if not ok2 then
-        fault(-32001, err)
+      elseif method == "control.setValue" then
+        if not params.component or not params.control or params.value == nil then
+          fault(-32602, "Missing: component, control, value") return
+        end
+        local ok2, err = setControlValue(
+          params.component, params.control, params.value, params.valueType)
+        if not ok2 then
+          fault(-32001, err)
+        else
+          result({ success = true })
+          log(string.format("SET  %s.%s = %s", params.component, params.control, tostring(params.value)))
+        end
+
+      elseif method == "control.setMultiple" then
+        -- Bulk-set: params.controls = [ {component, control, value, valueType}, ... ]
+        local results = {}
+        for _, item in ipairs(params.controls or {}) do
+          local ok2, err = setControlValue(item.component, item.control, item.value, item.valueType)
+          table.insert(results, { component = item.component, control = item.control, success = ok2, error = err })
+        end
+        result({ results = results })
+        log(string.format("SET_MULTI  %d controls", #results))
+
       else
-        result({ success = true })
-        log(string.format("SET  %s.%s = %s", params.component, params.control, tostring(params.value)))
+        fault(-32601, "Method not found: " .. method)
       end
+    end)
 
-    elseif method == "control.setMultiple" then
-      -- Bulk-set: params.controls = [ {component, control, value, valueType}, ... ]
-      local results = {}
-      for _, item in ipairs(params.controls or {}) do
-        local ok2, err = setControlValue(item.component, item.control, item.value, item.valueType)
-        table.insert(results, { component = item.component, control = item.control, success = ok2, error = err })
-      end
-      result({ results = results })
-      log(string.format("SET_MULTI  %d controls", #results))
-
-    else
-      fault(-32601, "Method not found: " .. method)
+    if not routeOk then
+      log("Internal command error: " .. tostring(routeErr))
+      fault(-32603, "Internal error: " .. tostring(routeErr))
     end
   end
 
@@ -532,7 +554,7 @@ if Controls then
         event         = "connected",
         server        = "Q-SYS Claude MCP Bridge",
         version       = "1.0.0",
-        designName    = Design.Name or "Unknown",
+        designName    = getDesignInfo().name,
         writesAllowed = allowWrites
       })
     end
@@ -565,11 +587,12 @@ if Controls then
   local hbTimer = Timer.New()
   hbTimer.EventHandler = function()
     if clientCount > 0 then
+      local info = getDesignInfo()
       broadcast({
         event       = "heartbeat",
         timestamp   = os.time(),
-        designName  = Design.Name      or "Unknown",
-        isEmulating = Design.IsEmulating or false
+        designName  = info.name,
+        isEmulating = info.isEmulating
       })
     end
   end
