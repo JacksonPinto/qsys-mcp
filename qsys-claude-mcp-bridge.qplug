@@ -532,6 +532,12 @@ if Controls then
     server = TcpSocketServer.New()
 
     server.EventHandler = function(srv, newSock)
+      -- Some Q-SYS server events may invoke this handler without an accepted socket.
+      if not newSock then
+        log("Server event received without client socket; ignoring")
+        return
+      end
+
       -- newSock is a TcpSocket for the accepted client connection
       local maxC = Properties["Max Clients"].Value
       if clientCount >= maxC then
