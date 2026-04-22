@@ -1,8 +1,17 @@
 {
+  "_readme": "Choose the block for your OS. On Windows you MUST use the full path to node.exe (run 'where node' in CMD to find it).",
+
   "mcpServers": {
     "qsys-designer": {
+
+      "_macOS_example_command": "node",
+      "_macOS_example_args": ["/absolute/path/to/qsys-mcp/mcp-server/index.js"],
+
+      "_windows_example_command": "C:\\Program Files\\nodejs\\node.exe",
+      "_windows_example_args": ["C:\\Users\\YourName\\Documents\\GitHub\\qsys-mcp\\mcp-server\\index.js"],
+
       "command": "node",
-      "args": ["/CHANGE/THIS/PATH/qsys-claude-mcp/mcp-server/index.js"],
+      "args": ["/CHANGE/THIS/PATH/qsys-mcp/mcp-server/index.js"],
       "env": {
         "QSYS_HOST": "127.0.0.1",
         "QSYS_PORT": "8765"

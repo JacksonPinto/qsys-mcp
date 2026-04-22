@@ -75,8 +75,14 @@ npm install
 
 ### Test manually
 
+**macOS / Linux:**
 ```bash
 QSYS_HOST=127.0.0.1 QSYS_PORT=8765 node index.js
+```
+
+**Windows (Command Prompt):**
+```cmd
+set QSYS_HOST=127.0.0.1&& set QSYS_PORT=8765&& node index.js
 ```
 
 You should see:
@@ -85,6 +91,8 @@ You should see:
 [bridge] Connected to Q-SYS plugin at 127.0.0.1:8765
 [bridge] MCP transport ready — Claude Desktop can now connect
 ```
+
+> **Note:** If Q-SYS is not running you will see `Initial connect failed: connect ECONNREFUSED` — this is expected. The key line is `MCP transport ready`.
 
 ---
 
@@ -97,14 +105,14 @@ Edit Claude Desktop's MCP config file:
 | macOS   | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 
-Add the following entry (adjust the path to your `index.js`):
+### macOS / Linux
 
 ```json
 {
   "mcpServers": {
     "qsys-designer": {
       "command": "node",
-      "args": ["/absolute/path/to/qsys-claude-mcp/mcp-server/index.js"],
+      "args": ["/absolute/path/to/qsys-mcp/mcp-server/index.js"],
       "env": {
         "QSYS_HOST": "127.0.0.1",
         "QSYS_PORT": "8765"
@@ -114,7 +122,35 @@ Add the following entry (adjust the path to your `index.js`):
 }
 ```
 
-Restart Claude Desktop. You should see **"qsys-designer"** appear in the MCP tools panel.
+### Windows
+
+> **Important:** Claude Desktop on Windows launches MCP servers with the **system PATH**, not your user PATH. Because Node.js is typically installed to the user PATH only, `"command": "node"` will silently fail and the server will never appear in Claude Desktop.  
+> You must use the **full path to `node.exe`**.
+
+1. Find your Node.js path — run this in Command Prompt:
+   ```cmd
+   where node
+   ```
+   Example output: `C:\Program Files\nodejs\node.exe`
+
+2. Add the entry to your config (use double backslashes):
+
+```json
+{
+  "mcpServers": {
+    "qsys-designer": {
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["C:\\Users\\YourName\\Documents\\GitHub\\qsys-mcp\\mcp-server\\index.js"],
+      "env": {
+        "QSYS_HOST": "127.0.0.1",
+        "QSYS_PORT": "8765"
+      }
+    }
+  }
+}
+```
+
+**Fully quit and reopen Claude Desktop** (right-click the tray icon → Quit, then relaunch). You should see **"qsys-designer"** appear in the Local MCP Servers panel.
 
 ---
 
@@ -215,7 +251,9 @@ The plugin broadcasts these unsolicited:
 | Bridge can't connect | Check Core/Emulator is running and port matches |
 | "Method not found" | Verify plugin version matches server version |
 | Controls silently not changing | Check "Allow Control Writes" property is enabled |
-| Claude Desktop doesn't show the tool | Restart Claude Desktop after editing config JSON |
+| Claude Desktop doesn't show the tool | Fully quit Claude Desktop (tray icon → Quit) and relaunch |
+| qsys-designer missing on Windows | Use full path to `node.exe` (run `where node` in CMD) instead of `"node"` |
+| Server shows but immediately errors | Check Claude Desktop MCP logs at `%APPDATA%\Claude\logs\mcp-server-qsys-designer.log` |
 
 ---
 
