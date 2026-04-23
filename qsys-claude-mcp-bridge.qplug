@@ -531,8 +531,11 @@ if Controls then
     -- TcpSocketServer is the correct Q-SYS API for listening/accepting connections
     server = TcpSocketServer.New()
 
-    server.EventHandler = function(srv, newSock)
-      -- newSock is a TcpSocket for the accepted client connection
+    -- Q-SYS TcpSocketServer.EventHandler receives the new client socket as the
+    -- single argument (not a (server, sock) pair like TcpSocket).
+    server.EventHandler = function(newSock)
+      if not newSock then return end
+
       local maxC = Properties["Max Clients"].Value
       if clientCount >= maxC then
         log("Max clients reached — rejecting connection")
